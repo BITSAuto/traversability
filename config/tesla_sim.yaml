@@ -1,0 +1,23 @@
+# Parameters for the Webots tesla_sim vehicle (D435i-spec depth camera on the
+# front sensor slot, 2.12 m behind the bumper, ~1.24 m above the road).
+ground_geometry:
+  ros__parameters:
+    depth_topic: /vehicle/range_finder/image
+    camera_info_topic: /vehicle/range_finder/camera_info
+    imu_topic: /vehicle/imu
+    # The bonnet fills the bottom of the depth image out to ~2.2 m; keep it
+    # out of the plane fit and out of the grid.
+    fit_min_range: 2.0
+    self_mask: [-1.0, 2.3, -1.1, 1.1]
+    # Webots depth is noise-free, so no distance-scaled noise margin on the
+    # height thresholds; the launch file's noise:=true sets this back to the
+    # D435-like value it injects.
+    depth_noise_coeff: 0.0
+
+traversability_grid:
+  ros__parameters:
+    x_min: 0.0
+    x_max: 12.0
+    y_min: -8.0
+    y_max: 8.0
+    resolution: 0.1
