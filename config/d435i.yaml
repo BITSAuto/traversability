@@ -1,0 +1,31 @@
+# Parameters for a real Intel RealSense D435i driven by realsense2_camera
+# (launch/d435i.launch.py). Topic names assume the driver's defaults:
+# camera_namespace "camera", camera_name "camera".
+ground_geometry:
+  ros__parameters:
+    depth_topic: /camera/camera/depth/image_rect_raw       # 16UC1, millimetres
+    camera_info_topic: /camera/camera/depth/camera_info
+    imu_topic: /camera/camera/accel/sample                 # accelerometer only
+    # Hand-held or tripod testing can put the camera well below vehicle
+    # height; the mount on the vehicle will want this raised again.
+    camera_height_min: 0.2
+    camera_height_max: 3.0
+    # D435 depth is good to ~3 m and usable to ~6-8 m; fit the plane on the
+    # accurate part and drop the rest.
+    fit_min_range: 0.5
+    fit_max_range: 6.0
+    max_range: 8.0
+    # Real stereo noise: keep the distance-scaled height margin.
+    depth_noise_coeff: 0.005
+    noise_sigmas: 2.0
+    # No self mask until the camera is mounted on the vehicle.
+
+traversability_grid:
+  ros__parameters:
+    x_min: 0.0
+    x_max: 8.0
+    y_min: -5.0
+    y_max: 5.0
+    resolution: 0.05
+    # Finer cells hold fewer points; keep speckle suppression proportionate.
+    min_obstacle_points: 3

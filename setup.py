@@ -12,7 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/config', glob('config/*.yaml') + glob('config/*.rviz')),
         ('share/' + package_name + '/worlds/textures', glob('worlds/textures/*.png') + glob('worlds/textures/*.jpg')),
     ],
     install_requires=['setuptools'],
@@ -29,6 +29,7 @@ setup(
             'depth_noise = traversability.depth_noise_node:main',
             'spawn_test_scene = traversability.test_scene:spawn_main',
             'check_test_scene = traversability.test_scene:check_main',
+            'snapshot = traversability.snapshot:main',
         ],
     },
 )
