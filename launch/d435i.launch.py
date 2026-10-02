@@ -15,7 +15,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -28,19 +28,22 @@ def generate_launch_description():
     fps = LaunchConfiguration('fps')
     profile = PythonExpression(["'848x480x' + '", fps, "'"])
 
-    realsense = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(
-            get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')),
-        launch_arguments={
+    # Scoped without forwarding, so this file's own arguments (params, camera,
+    # ...) don't leak into rs_launch.py, which warns about unknown ones. The
+    # driver's settings are handed in as the group's only configurations
+    # (evaluated before the reset, so `profile` can still read `fps`).
+    realsense = GroupAction(
+        scoped=True, forwarding=False, condition=IfCondition(LaunchConfiguration('camera')),
+        launch_configurations={
             'depth_module.depth_profile': profile,
             'rgb_camera.color_profile': profile,
             'enable_accel': 'true',
             'enable_gyro': 'false',
             'pointcloud.enable': 'false',
             'align_depth.enable': 'false',
-        }.items(),
-        condition=IfCondition(LaunchConfiguration('camera')),
-    )
+        },
+        actions=[IncludeLaunchDescription(PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')))])
 
     return LaunchDescription([
         DeclareLaunchArgument('params', default_value=os.path.join(share, 'config', 'd435i.yaml')),

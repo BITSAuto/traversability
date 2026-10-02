@@ -23,6 +23,7 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import TransformStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -188,11 +189,12 @@ def main(args=None):
     node = GroundGeometryNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown
     finally:
-        node.destroy_node()
+        # On SIGINT, newer rclpy (Jazzy) has already shut the context down.
         if rclpy.ok():
+            node.destroy_node()
             rclpy.shutdown()
 
 

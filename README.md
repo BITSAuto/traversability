@@ -56,6 +56,25 @@ To look at it, add an RViz `Map` display on `/traversability/grid` and a
 `PointCloud2` display on `/traversability/ground_points` (colour by `label`),
 with fixed frame `camera_ground`.
 
+## Running on a real D435i (Orin)
+
+```bash
+source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 launch traversability d435i.launch.py              # driver + pipeline
+ros2 launch traversability d435i.launch.py rviz:=true   # ... with RViz (needs a display)
+ros2 run traversability snapshot                        # headless: writes traversability_snapshot.png
+```
+
+The launch file starts `realsense2_camera` with 848×480 depth and colour, plus
+the accelerometer. Use a USB 3 port. On USB 2, pass `fps:=15`. Parameters are
+in `config/d435i.yaml`. There is no self-mask yet, and `camera_height_min`
+is 0.2 m to allow hand-held testing. Once the camera has a fixed mount on the
+vehicle, set both.
+
+`snapshot` saves the colour image, the per-pixel labels and the grid side by
+side, and logs the label counts and the ground-height spread. Use it to check
+results over SSH.
+
 ### Test scene
 
 The start pose is inside a `RoadIntersection` whose visible surface sits about

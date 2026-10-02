@@ -16,6 +16,7 @@ Publishes:   /traversability/grid           nav_msgs/OccupancyGrid
 import numpy as np
 import rclpy
 from nav_msgs.msg import OccupancyGrid
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 
@@ -68,11 +69,12 @@ def main(args=None):
     node = GridNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown
     finally:
-        node.destroy_node()
+        # On SIGINT, newer rclpy (Jazzy) has already shut the context down.
         if rclpy.ok():
+            node.destroy_node()
             rclpy.shutdown()
 
 

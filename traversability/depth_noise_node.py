@@ -13,6 +13,7 @@ realistic noise.
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
@@ -49,11 +50,12 @@ def main(args=None):
     node = DepthNoiseNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown
     finally:
-        node.destroy_node()
+        # On SIGINT, newer rclpy (Jazzy) has already shut the context down.
         if rclpy.ok():
+            node.destroy_node()
             rclpy.shutdown()
 
 
