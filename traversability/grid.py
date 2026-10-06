@@ -35,7 +35,7 @@ class GridSpec:
         return row, col
 
 
-def fill_ground_gaps(points, labels, resolution, max_gap=1.0):
+def fill_ground_gaps(points, labels, resolution, max_gap=1.0, classes=None):
     """Interpolate ground points between vertically adjacent ground pixels.
 
     Far from the camera, consecutive image rows hit the road further apart
@@ -45,21 +45,27 @@ def fill_ground_gaps(points, labels, resolution, max_gap=1.0):
     unless the gap is large enough to hide a hole, hence ``max_gap``.
 
     Takes the organised (H, W, 3) points and (H, W) labels; returns extra
-    (N, 3) points, all ground.
+    (N, 3) points, all ground. With per-point semantic ``classes`` (H, W),
+    only pairs of the same class are filled, and the filled points' classes
+    are returned too: ``(points, classes)``.
     """
+    empty = np.empty((0, 3), dtype=points.dtype)
     if max_gap <= 0:
-        return np.empty((0, 3), dtype=points.dtype)
+        return empty if classes is None else (empty, np.empty(0, np.uint8))
     a, b = points[:-1], points[1:]
     pair = (labels[:-1] == GROUND) & (labels[1:] == GROUND)
+    if classes is not None:
+        pair &= classes[:-1] == classes[1:]
     gap = np.linalg.norm((b - a)[..., :2], axis=-1)
     pair &= (gap > resolution) & (gap <= max_gap)
-    a, b, gap = a[pair], b[pair], gap[pair]
-    if len(a) == 0:
-        return np.empty((0, 3), dtype=points.dtype)
+    a, b = a[pair], b[pair]
     # Enough samples that even a max_gap segment gets one per cell.
     steps = int(np.ceil(max_gap / resolution))
     t = (np.arange(1, steps) / steps)[None, :, None]                    # (1, S, 1)
-    return (a[:, None] + t * (b - a)[:, None]).reshape(-1, 3)
+    filled = (a[:, None] + t * (b - a)[:, None]).reshape(-1, 3)
+    if classes is None:
+        return filled
+    return filled, np.repeat(classes[:-1][pair], steps - 1)
 
 
 def rasterize(points, labels, spec, *, min_obstacle_points=3, min_ground_points=1):
