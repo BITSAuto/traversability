@@ -254,6 +254,52 @@ and matches torch exactly. The pipeline works end to end. What a student
 learns is bounded by its labels, which is why real campus data and
 human-labelled IDD are the next step (see the roadmap).
 
+### Real campus data (D435i bag, 2026-10-01)
+
+The first real recording is a 54.7 s drive around campus, 16.8 GB as MCAP.
+The file was never closed when it was recorded, so it was repaired by
+copying every complete record and adding a footer.
+
+- **Replay:** on the Orin, through `ground_geometry` and `record_frames`,
+  saving every 0.25 s. That gave 144 frames, with the camera about
+  1.51–1.53 m above the road and tilted down about 9°.
+- **Labels:** auto-labelled with Mask2Former plus geometry.
+- **Depth noise was about twice the assumed level.** Height spread on
+  teacher-labelled road grows from ±4 cm at 0–3 m to ±30 cm at 8–12 m. So
+  `autolabel` now:
+  - trusts geometry only within 6 m;
+  - widens its thresholds with distance (c = 0.01);
+  - lets "raised" override only a teacher "road" label, so verges stay
+    terrain and curbs stay sidewalk.
+
+Students were trained on the first 75 % of the drive and scored on the last
+25 % (36 frames; `--val-tail 0.25` / `--tail 0.25`). The reference is the
+auto-labels:
+
+| Model | mIoU | Road | Sidewalk | Terrain | Other | Forbidden recall | Laptop ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Campus student B0 RGB-D | 0.865 | 0.949 | 0.679 | 0.892 | 0.940 | 0.931 | 26 |
+| Campus student B0 RGB | 0.863 | 0.951 | 0.673 | 0.890 | 0.939 | 0.923 | 22 |
+| SegFormer-B0 zero-shot | 0.698 | 0.929 | 0.315 | 0.694 | 0.856 | 0.902 | 25 |
+| SegFormer-B2 zero-shot | 0.681 | 0.933 | 0.225 | 0.698 | 0.867 | 0.861 | 51 |
+| Sim-trained student B0 RGB-D | 0.468 | 0.878 | 0.011 | 0.459 | 0.526 | 0.808 | 25 |
+
+- **Fine-tuning on 108 real frames clearly helps,** most of all for sidewalk
+  and curb, and for terrain.
+- **Sim training doesn't transfer to the real road.**
+- **The height channel barely matters** at this data size.
+
+The held-out frames come from the same route, lighting and day, so expect
+lower numbers on new routes. Zero-shot B0 stays the default model until
+there's more varied campus data.
+
+On the Orin, the full pipeline runs live against the bag (TensorRT,
+`d435i.launch.py camera:=false semantics:=true`):
+- **Speed:** SegFormer-B0 at about 46 ms per frame with the bag replay
+  sharing the CPU; the RGB-D campus student at 46–53 ms.
+- **Grid:** the road comes out free, with no false obstacles in the lane.
+  Curbs, parked scooters, people and planters come out lethal.
+
 ## Known limitations
 
 - **Without semantics, flat non-road surfaces count as free.** This covers

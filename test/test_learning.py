@@ -86,3 +86,18 @@ def test_student_forward_shapes():
         with torch.no_grad():
             out = m.logits_full(x, torch.zeros(1, 1, *size))
         assert out.shape == (1, semantics.NUM_CLASSES, *size)
+
+
+def test_raised_terrain_keeps_label_and_far_noise_is_ignored():
+    classes, height, conf = scene()
+    classes[:, :40] = TERRAIN
+    height[:, :40] = 0.15                               # verge on a raised curb
+    depth = np.full(height.shape, 4.0, np.float32)
+    depth[:20] = 10.0                                   # beyond max_range
+    height[:20, 60:80] = 0.4                            # noisy far road
+    labels = correct_with_geometry(classes, conf, height, depth, 1.5)
+    assert np.all(labels[20:, :40] == TERRAIN)
+    assert np.all(labels[:20, 60:80] == ROAD)
+    height[60:70, 70:85] = 0.5                          # a real obstacle within range
+    labels = correct_with_geometry(classes, conf, height, depth, 1.5)
+    assert np.all(labels[60:70, 70:85] == OTHER)

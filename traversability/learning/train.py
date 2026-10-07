@@ -3,8 +3,8 @@
   ros2 run traversability train_student --data frames/campus_1 frames/sim_1 \\
       --arch segformer-b0 --rgbd --out students/b0_rgbd
 
-Validation uses every ``--val-every``-th frame of the frame folders (never
-trained on). IDD, if given with --idd, adds its train split to training (no
+Validation uses every ``--val-every``-th frame of the frame folders, or with
+``--val-tail`` the last part of each recording (never trained on). IDD, if given with --idd, adds its train split to training (no
 depth, so RGB-D students see it with the height channel empty).
 
 Writes <out>/best.pt (by validation mIoU), <out>/last.pt and
@@ -97,6 +97,9 @@ def main(argv=None):
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--lr', type=float, default=6e-5)
     ap.add_argument('--val-every', type=int, default=10)
+    ap.add_argument('--val-tail', type=float, default=0.0,
+                    help='hold out this fraction at the end of each folder instead of every n-th frame '
+                         '(use for real recordings, whose neighbouring frames are near-duplicates)')
     ap.add_argument('--eval-interval', type=int, default=500)
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--out', required=True)
@@ -113,7 +116,11 @@ def main(argv=None):
     for root in args.data:
         ds = FrameFolder(root)
         for i in range(len(ds)):
-            (val_items if i % args.val_every == 0 else train_items).append((ds, i))
+            if args.val_tail > 0:      # hold out the end of each recording (frames are time-ordered)
+                held_out = i >= len(ds) * (1 - args.val_tail)
+            else:
+                held_out = i % args.val_every == 0
+            (val_items if held_out else train_items).append((ds, i))
     if args.idd:
         idd = IDD(args.idd, 'train')
         train_items += [(idd, i) for i in range(len(idd))]

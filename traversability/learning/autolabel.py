@@ -6,8 +6,9 @@ For each frame from record_frames, the teacher (default Mask2Former Swin-L,
 Mapillary Vistas -- slow, but the most fine-grained label set) gives
 per-pixel classes, then depth geometry fixes what appearance gets wrong:
 
-  * Anything clearly above the ground is OTHER, whatever the teacher says
-    (e.g. a box the teacher calls road).
+  * Teacher "road" that is clearly above the ground is OTHER (e.g. a box
+    the teacher calls road). Geometry is only trusted within --max-range,
+    with thresholds that widen with distance to follow stereo noise.
   * Small flat OTHER regions surrounded by flat ROAD become ROAD: these are
     the newspapers and paint marks the original model failed on, and
     labelling them road is what teaches the student to ignore them.
@@ -29,13 +30,25 @@ from traversability.learning.data import FrameFolder
 DEFAULT_TEACHER = 'hf:facebook/mask2former-swin-large-mapillary-vistas-semantic'
 
 
-def correct_with_geometry(classes, confidence, height, *, obstacle_height=0.15, ground_tolerance=0.06,
-                          min_confidence=0.5, max_patch_fraction=0.02, enclosure_fraction=0.75, ring=15):
-    """Teacher classes + height above ground -> training labels."""
+def correct_with_geometry(classes, confidence, height, depth=None, camera_height=1.5, *, obstacle_height=0.15,
+                          ground_tolerance=0.06, min_confidence=0.5, max_patch_fraction=0.02,
+                          enclosure_fraction=0.75, ring=15, max_range=6.0, noise_coeff=0.01, noise_sigmas=3.0):
+    """Teacher classes + height above ground -> training labels.
+
+    With ``depth`` (metres), geometry is trusted only up to ``max_range`` and
+    its height thresholds widen with distance (sigma_h ~ c * h_cam * z; c of
+    0.01 matches a D435i measured on campus road, about twice the datasheet
+    figure). Raised pixels override only a teacher "road" label -- a raised
+    verge stays terrain, a curb stays sidewalk.
+    """
     labels = classes.copy()
     valid = np.isfinite(height)
-    flat = valid & (np.abs(height) < ground_tolerance)
-    labels[valid & (height > obstacle_height)] = semantics.OTHER
+    tolerance = 0.0
+    if depth is not None:
+        valid &= np.isfinite(depth) & (depth < max_range)
+        tolerance = noise_sigmas * noise_coeff * camera_height * np.nan_to_num(depth)
+    flat = valid & (np.abs(height) < ground_tolerance + tolerance)
+    labels[valid & (height > obstacle_height + tolerance) & (classes == semantics.ROAD)] = semantics.OTHER
 
     # Flat "other" blobs enclosed by flat road -> road.
     candidates = (flat & (classes == semantics.OTHER)).astype(np.uint8)
@@ -66,6 +79,7 @@ def main(argv=None):
     ap.add_argument('--teacher', default=DEFAULT_TEACHER)
     ap.add_argument('--input-size', type=int, nargs=2, default=(1024, 576), metavar=('W', 'H'))
     ap.add_argument('--min-confidence', type=float, default=0.5)
+    ap.add_argument('--max-range', type=float, default=6.0, help='trust depth geometry up to this distance (m)')
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--viz', action='store_true', help='also write overlays to <frames>/viz')
     args = ap.parse_args(argv)
@@ -85,7 +99,11 @@ def main(argv=None):
             rgb = data.rgb(i)
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             classes, confidence = teacher(bgr)
-            labels = correct_with_geometry(classes, confidence, data.height(i), min_confidence=args.min_confidence)
+            meta = data.meta(i)
+            up = np.asarray(meta['R'])[:, 2]
+            camera_height = float(-up @ np.asarray(meta['t']))      # camera's distance above the plane
+            labels = correct_with_geometry(classes, confidence, data.height(i), data.depth(i), camera_height,
+                                           min_confidence=args.min_confidence, max_range=args.max_range)
             cv2.imwrite(out, labels)
             if args.viz:
                 shown = np.where(labels[..., None] == semantics.IGNORE, 0,

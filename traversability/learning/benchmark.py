@@ -42,12 +42,15 @@ def main(argv=None):
     ap.add_argument('--models', nargs='+', required=True, help='specs: hf:..., student:..., trt:...')
     ap.add_argument('--input-size', type=int, nargs=2, default=(1024, 576), metavar=('W', 'H'))
     ap.add_argument('--every', type=int, default=1, help='use every n-th frame')
+    ap.add_argument('--tail', type=float, default=0.0,
+                    help='only the last fraction of each folder (matches train_student --val-tail)')
     ap.add_argument('--out')
     args = ap.parse_args(argv)
 
     from traversability import segmentation
     folders = [FrameFolder(r) for r in args.data]
-    frames = [(f, i) for f in folders for i in range(0, len(f), args.every)]
+    frames = [(f, i) for f in folders for i in range(0, len(f), args.every)
+              if i >= len(f) * (1 - args.tail)]
     rows = []
     for spec in args.models:
         seg = segmentation.load(spec, input_size=tuple(args.input_size))
