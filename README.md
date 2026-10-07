@@ -1,7 +1,13 @@
 # traversability
 
-Depth-based road traversability for the BITSAuto vehicle (Intel RealSense
-D435i). Phase 1 of the road-segmentation plan: geometry only, no learning.
+Road traversability for the BITSAuto vehicle (Intel RealSense D435i):
+depth geometry fused with semantic segmentation into a local occupancy grid.
+
+- **Phase 1:** geometry only, which handles paint, paper and stains.
+- **Phase 2:** adds a zero-shot semantic model and the fusion rules (grass
+  and sidewalks forbidden).
+- **Phase 3:** the pipeline for recording, auto-labelling and training your
+  own RGB-D model, plus TensorRT deployment on the Orin.
 
 The road is treated as a plane. Each depth frame is fit with a ground plane
 (RANSAC, constrained by the IMU's gravity direction), every pixel is labelled
@@ -10,17 +16,24 @@ by its height above that plane, and the result is rasterised into a local
 stain — are ground no matter what they look like, which is the failure the
 appearance-only YOLO model in `road_segmentation` has.
 
-Geometry alone cannot tell road from flat grass or a flush sidewalk. Phase 2
-adds a semantic model and fuses it in `grid_node` (see **Roadmap**).
+Geometry alone cannot tell road from flat grass or a flush sidewalk, so a
+semantic model labels each colour pixel as road, sidewalk, terrain or other,
+and `traversability_grid` fuses the two (see **Phase 2**).
 
 ## Nodes
 
 | Executable | In | Out |
 | --- | --- | --- |
 | `ground_geometry` | depth image (32FC1 m or 16UC1 mm), its `CameraInfo`, `Imu` | `/traversability/ground_points` (organised `PointCloud2`, x/y/z/label in `camera_ground`), TF `<depth frame> -> camera_ground` |
-| `traversability_grid` | `/traversability/ground_points` | `/traversability/grid` (`OccupancyGrid` in `camera_ground`: 0 free, 100 lethal, -1 unknown) |
+| `semantic_seg` | colour image (+ registered depth for RGB-D models) | `/traversability/semantics` (mono8: 1 road, 2 sidewalk, 3 terrain, 4 other), `/traversability/semantics_overlay` |
+| `traversability_grid` | `/traversability/ground_points` (+ semantics when `semantic_topic` is set) | `/traversability/grid` (`OccupancyGrid` in `camera_ground`: 0 free, 100 lethal, -1 unknown) |
+| `record_frames` | colour, depth registered to colour, ground-plane TF | training frames on disk (phase 3) |
 | `depth_noise` | perfect sim depth | the same with D435-like noise, sigma_z = c·z² |
 | `spawn_test_scene` / `check_test_scene` | — | Webots test scene and its pass/fail check |
+| `snapshot` | pipeline topics | PNG of colour, labels and grid, for headless checks |
+
+Offline tools (need torch and transformers, so the laptop rather than the
+Orin): `autolabel`, `train_student`, `export_model`, `benchmark_models`.
 
 `camera_ground` sits on the road directly below the camera: X forward, Y
 left, Z up. Point labels: 0 unknown/masked, 1 ground, 2 obstacle, 3 drop,
@@ -50,6 +63,8 @@ distrobox enter ubuntu22 -- ~/ros2_ws/scripts/run_tesla_sim.sh
 # second terminal, same ROS_DOMAIN_ID, inside the distrobox with the workspace sourced:
 ros2 launch traversability traversability.launch.py              # perfect sim depth
 ros2 launch traversability traversability.launch.py noise:=true  # D435-like noise
+ros2 launch traversability traversability.launch.py semantics:=true                       # + SegFormer-B2
+ros2 launch traversability traversability.launch.py semantics:=true model:=student:<ckpt.pt>
 ```
 
 To look at it, add an RViz `Map` display on `/traversability/grid` and a
@@ -75,6 +90,18 @@ vehicle, set both.
 side, and logs the label counts and the ground-height spread. Use it to check
 results over SSH.
 
+With semantics, the Orin runs a TensorRT engine; it has no torch. Engines
+built there live in `~/traversability_models/`:
+
+```bash
+ros2 launch traversability d435i.launch.py semantics:=true            # SegFormer-B0 engine (default)
+ros2 launch traversability d435i.launch.py semantics:=true model:=trt:$HOME/traversability_models/segformer_b2.engine
+ros2 launch traversability d435i.launch.py align:=true record_dir:=$HOME/traversability_data/campus_1   # record for phase 3
+```
+
+RGB-D students also need `align:=true`, since they take the height of each
+colour pixel.
+
 ### Test scene
 
 The start pose is inside a `RoadIntersection` whose visible surface sits about
@@ -86,27 +113,204 @@ plain segment `road(5)` first:
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 3.0}}"   # ~7 s, then Ctrl-C
 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}"                    # stop
 ros2 run traversability spawn_test_scene
-ros2 run traversability check_test_scene --ros-args -p frames:=20
+ros2 run traversability check_test_scene --ros-args -p frames:=20                 # geometry only
+ros2 run traversability check_test_scene --ros-args -p frames:=10 -p mode:=fused  # with semantics
 ```
 
 The scene has four flat objects that should come out free (a paint line, a
 newspaper, an oil stain and a grass patch) and four obstacles that should come
 out lethal (a 0.15 m brick, a 3 m × 0.15 m curb, a 0.5 m box and a 1 m
-barrel), all 3.5–9 m ahead. The check also counts lethal cells on the open
-road. To remove the scene: `ros2 run traversability spawn_test_scene --ros-args -p remove_only:=true`.
+barrel), all 3.5–9 m ahead. In `fused` mode the grass must be lethal instead.
+The check also counts lethal cells on the open road. To remove the scene: `ros2 run traversability spawn_test_scene --ros-args -p remove_only:=true`.
 
-Results on 2026-10-02:
+Phase 1 results (2026-10-02, re-checked 2026-10-06 after the phase 2 changes):
 
 | Depth | Flat objects free | Obstacles lethal | False lethal on open road |
 | --- | --- | --- | --- |
 | Perfect (sim) | 4/4 | 4/4 | 0 |
 | D435-like noise, 20 frames | 4/4 | 4/4 | 0 (plus 3–30 cells per frame smeared within 1 m of the far obstacles, which is radial depth noise of σ ≈ 0.3 m at 8 m) |
 
+## Phase 2: semantics and fusion
+
+`semantic_seg` runs any backend from `traversability.segmentation`. All of them
+output probabilities over the same four classes:
+
+| Spec | Backend | Use |
+| --- | --- | --- |
+| `hf:<model id>` | Hugging Face checkpoint (SegFormer, Mask2Former), torch | laptop, benchmarking, auto-label teacher |
+| `student:<ckpt.pt>` | phase 3 student, torch | laptop |
+| `trt:<engine>` | TensorRT engine built from `export_model` output | Orin; uses `libcudart` through ctypes, so there is nothing extra to install |
+
+Source labels are mapped by name (`semantics.py`):
+- **Road:** road, lane markings, crosswalks, manholes, parking, IDD "drivable fallback".
+- **Sidewalk:** sidewalk, curb, pedestrian area.
+- **Terrain:** vegetation, terrain, sand, water, IDD "non-drivable fallback".
+- **Other:** everything else.
+
+The fusion rules, per 10 cm cell, are in `fusion.py`:
+
+| Geometry | Semantics | Cell |
+| --- | --- | --- |
+| obstacle / drop | any | lethal |
+| ground | mostly road | free |
+| ground | mostly sidewalk / terrain | lethal |
+| ground | mostly other, ≤ 2 m² and ≥ 75 % of its border is road | free (paint, paper, stains, manholes) |
+| ground | mostly other, otherwise | lethal |
+| ground | outside the colour camera's view | unknown (`unlabelled_ground`) |
+
+The grid is driven by the semantic frames. Each one is paired with the
+buffered depth cloud closest to it in time, because semantics lag the cameras
+by the model's latency. If semantics stop for over 1 s, the grid keeps
+publishing obstacles with ground unknown. It never falls back to
+geometry-only, which would show grass as free.
+
+### Results (Webots test scene, fused mode, perfect depth)
+
+| Model | Paint / paper / oil free | Grass lethal | Obstacles lethal | False lethal | Orin TensorRT FP16 (GPU / end-to-end / in the ROS node) |
+| --- | --- | --- | --- | --- | --- |
+| SegFormer-B0, Cityscapes | 3/3 | borderline: 80–89 % of cells over two runs (1 pass, 1 just under the 80 % bar) | 4/4 | 0 | 9 / 23 / 30 ms |
+| SegFormer-B2, Cityscapes | 3/3 | no (0/130 cells) | 4/4 | 0 | 31 / 51 ms |
+| Mask2Former Swin-L, Mapillary | 3/3 | no (0/130 cells) | 4/4 | 0 | not deployed (offline teacher) |
+
+The fusion rule handles the patches with every model, and geometry keeps every
+obstacle lethal even where a model calls it road.
+
+**Grass is the weak point.** At 5.5 m, a 1.2 × 1.5 m grass mat lying in the
+lane is called road by B2 and Mask2Former. They use the surrounding asphalt
+as context. All three models got the same mat right when it was closer and
+at the image edge. TensorRT output matches torch on 99.7 % of pixels or more.
+
+## Phase 3: your own model
+
+**Dependencies.**
+- The laptop needs torch with CUDA plus
+  `pip install --user transformers huggingface_hub onnx "pillow>=10"`.
+  Pin `numpy==1.26.4` so `cv_bridge` keeps working, and use a pip newer
+  than Ubuntu 22.04's 22.0.2, which has a resolver bug.
+- The Orin needs only its TensorRT.
+
+The workflow:
+
+1. **Record** colour, registered depth and the ground plane while driving:
+   - real camera: `d435i.launch.py align:=true record_dir:=...`;
+   - sim: `ros2 run traversability record_frames --ros-args -p out_dir:=...`
+     alongside the pipeline.
+2. **Auto-label:** `ros2 run traversability autolabel <dir> --viz`.
+   - A teacher model (Mask2Former, Mapillary) labels each pixel, then depth
+     corrects it.
+   - Anything above the ground becomes "other".
+   - Small flat "other" blobs surrounded by flat road become **road**. That is
+     what teaches the student that paint and paper are road.
+   - Low-confidence pixels are ignored.
+   - Check the `viz/` overlays, and correct labels by hand where it matters.
+3. **Train:** `ros2 run traversability train_student --data <dirs> [--idd <IDD root>] --arch segformer-b0 --rgbd --out <dir> --export`.
+   - Architectures: SegFormer-B0/B2 (starting from Cityscapes weights) or
+     DINOv2-small/base with a linear head.
+   - `--rgbd` adds height above ground as a fourth input channel. It is
+     zero-initialised, so training starts from the RGB model's behaviour.
+   - Augmentation includes pasting synthetic paper, paint and stains onto road
+     pixels (labelled road), and dropping the height channel.
+   - IDD has no depth, so its frames always train with the height channel
+     dropped.
+   - Every 10th frame is held out for validation.
+4. **Compare:** `ros2 run traversability benchmark_models --data <dirs> --every 10 --models student:... hf:...`.
+   It reports per-class IoU, plus flat-road recall (does the model call
+   flat road, patches included, road?) and forbidden recall (does it catch
+   sidewalk and terrain?).
+5. **Deploy:**
+   - `export_model` (or `--export`) writes ONNX and a `.json` sidecar.
+   - On the Orin: `/usr/src/tensorrt/bin/trtexec --onnx=m.onnx --saveEngine=m.engine --fp16`.
+   - Keep `m.onnx.json` next to the engine, then run `model:=trt:m.engine`.
+
+Sim data for testing the pipeline comes from `tools/sim_slow_follower.py`,
+which drives the city at 15 km/h, and `tools/sim_clutter_spawner.py`, which
+scatters flat paper, paint, stains and grass ahead of the car. Both use
+textures distinct from the test scene's.
+
+### Results (sim, 2026-10-06)
+
+The dataset was 480 frames from one drive around the city: 432 for training,
+48 held out. The student is SegFormer-B0 RGB-D, trained for 3000 steps (25 min
+on an RTX 3060).
+
+| Model (48 held-out frames, auto-labels as reference) | mIoU | Road | Terrain | Sidewalk | Flat-road recall | Forbidden recall |
+| --- | --- | --- | --- | --- | --- | --- |
+| Student B0 RGB-D | 0.855 | 0.994 | 0.962 | 0.477 | 1.000 | 0.977 |
+| SegFormer-B0 zero-shot | 0.583 | 0.944 | 0.459 | 0.059 | 0.978 | 0.494 |
+| SegFormer-B2 zero-shot | 0.591 | 0.955 | 0.487 | 0.038 | 0.998 | 0.547 |
+
+The reference labels come from the teacher, so this measures how well each
+model matches the teacher, not accuracy against ground truth. Sidewalk barely
+exists in this world (0.1 % of pixels).
+
+**On the held-out test scene, the student passes everything except the grass
+mat, like its teacher.** It inherits the teacher's error: 97 % of the grass
+clutter in its training data was auto-labelled road, because Mask2Former
+called it road. Geometry can only turn patches into road; it can't add
+forbidden surfaces the teacher missed.
+
+On the Orin, the student's TensorRT engine runs at 9 ms GPU / 29 ms end-to-end
+and matches torch exactly. The pipeline works end to end. What a student
+learns is bounded by its labels, which is why real campus data and
+human-labelled IDD are the next step (see the roadmap).
+
+### Real campus data (D435i bag, 2026-10-01)
+
+The first real recording is a 54.7 s drive around campus, 16.8 GB as MCAP.
+The file was never closed when it was recorded, so it was repaired by
+copying every complete record and adding a footer.
+
+- **Replay:** on the Orin, through `ground_geometry` and `record_frames`,
+  saving every 0.25 s. That gave 144 frames, with the camera about
+  1.51–1.53 m above the road and tilted down about 9°.
+- **Labels:** auto-labelled with Mask2Former plus geometry.
+- **Depth noise was about twice the assumed level.** Height spread on
+  teacher-labelled road grows from ±4 cm at 0–3 m to ±30 cm at 8–12 m. So
+  `autolabel` now:
+  - trusts geometry only within 6 m;
+  - widens its thresholds with distance (c = 0.01);
+  - lets "raised" override only a teacher "road" label, so verges stay
+    terrain and curbs stay sidewalk.
+
+Students were trained on the first 75 % of the drive and scored on the last
+25 % (36 frames; `--val-tail 0.25` / `--tail 0.25`). The reference is the
+auto-labels:
+
+| Model | mIoU | Road | Sidewalk | Terrain | Other | Forbidden recall | Laptop ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Campus student B0 RGB-D | 0.865 | 0.949 | 0.679 | 0.892 | 0.940 | 0.931 | 26 |
+| Campus student B0 RGB | 0.863 | 0.951 | 0.673 | 0.890 | 0.939 | 0.923 | 22 |
+| SegFormer-B0 zero-shot | 0.698 | 0.929 | 0.315 | 0.694 | 0.856 | 0.902 | 25 |
+| SegFormer-B2 zero-shot | 0.681 | 0.933 | 0.225 | 0.698 | 0.867 | 0.861 | 51 |
+| Sim-trained student B0 RGB-D | 0.468 | 0.878 | 0.011 | 0.459 | 0.526 | 0.808 | 25 |
+
+- **Fine-tuning on 108 real frames clearly helps,** most of all for sidewalk
+  and curb, and for terrain.
+- **Sim training doesn't transfer to the real road.**
+- **The height channel barely matters** at this data size.
+
+The held-out frames come from the same route, lighting and day, so expect
+lower numbers on new routes. Zero-shot B0 stays the default model until
+there's more varied campus data.
+
+On the Orin, the full pipeline runs live against the bag (TensorRT,
+`d435i.launch.py camera:=false semantics:=true`):
+- **Speed:** SegFormer-B0 at about 46 ms per frame with the bag replay
+  sharing the CPU; the RGB-D campus student at 46–53 ms.
+- **Grid:** the road comes out free, with no false obstacles in the lane.
+  Curbs, parked scooters, people and planters come out lethal.
+
 ## Known limitations
 
-- **Flat non-road surfaces count as free.** This covers grass, a flush
-  sidewalk, a dirt verge, and the grass patch in the test scene. Phase 2's
-  semantics have to forbid them.
+- **Without semantics, flat non-road surfaces count as free.** This covers
+  grass, a flush sidewalk and a dirt verge. With semantics, it depends on the
+  model (see the phase 2 results).
+- **Auto-labels inherit the teacher's mistakes.** A student distilled from
+  them can't beat the teacher on forbidden surfaces. Human labels (IDD,
+  corrected campus frames) are needed for that.
+- **Only colour pixels get semantics.** The colour camera's field of view
+  (69°) is narrower than the depth camera's (87°), so ground in the outer
+  wedges is unknown when fusing.
 - **Low obstacles at range under noise.** With real D435 noise the height
   margin at 5–7 m is about 0.15 m. A 13 cm curb there is detected only
   sparsely (about 11 of 90 cells in the noisy run). Per-cell statistics
@@ -123,25 +327,20 @@ Results on 2026-10-02:
 
 ## Roadmap
 
-1. ~~Geometry baseline in Webots~~ (this package).
-2. Run a multi-class semantic model zero-shot (SegFormer / PIDNet with
-   Cityscapes or Mapillary weights, mapped to road / sidewalk / vegetation /
-   other). Fuse it in `grid_node`:
-   - Geometry obstacle → lethal.
-   - Road → free.
-   - "Other" that is small and enclosed by road → free.
-   - Sidewalk or vegetation → lethal.
-   - "Other" that is large → lethal.
-   For this, `ground_geometry` should run on depth registered to the RGB
-   image (`/vehicle/range_finder/image_registered`).
-3. Fine-tune on IDD, Webots ground-truth segmentation, and campus D435i
-   recordings auto-labelled with SAM2 plus geometry. Then move to RGB-D
-   (ESANet / DFormer with a height-above-ground channel).
-4. Deploy with TensorRT on the Orin AGX and measure an end-to-end latency
-   budget.
+1. ~~Geometry baseline~~ (phase 1).
+2. ~~Zero-shot semantics and fusion~~ (phase 2).
+3. ~~Record → auto-label → train → TensorRT pipeline~~ (phase 3, validated in sim).
+4. **Real data.** Record campus drives with the D435i and auto-label them.
+   Spot-correct the labels, especially verges and sidewalks. Download IDD
+   Segmentation (needs a free account at idd.insaan.iiit.ac.in) and run its
+   `createLabels.py --id-type level3Ids`. Then train on campus data plus IDD,
+   and compare against zero-shot B0 with `benchmark_models` on held-out campus
+   frames.
+5. **Robustness.** Use per-cell height statistics for low obstacles at range,
+   and temporal accumulation of the grid (or Nav2's layers).
 
 ## Tests
 
 ```bash
-python3 -m pytest test        # inside the distrobox, from this directory
+python3 -m pytest test        # inside the distrobox, from this directory (torch tests skip without torch)
 ```

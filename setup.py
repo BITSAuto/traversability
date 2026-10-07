@@ -7,7 +7,7 @@ package_name = 'traversability'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=[package_name],
+    packages=[package_name, package_name + '.learning'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -30,6 +30,12 @@ setup(
             'spawn_test_scene = traversability.test_scene:spawn_main',
             'check_test_scene = traversability.test_scene:check_main',
             'snapshot = traversability.snapshot:main',
+            'semantic_seg = traversability.semantic_seg_node:main',
+            'record_frames = traversability.record_frames_node:main',
+            'autolabel = traversability.learning.autolabel:main',
+            'train_student = traversability.learning.train:main',
+            'export_model = traversability.learning.export:main',
+            'benchmark_models = traversability.learning.benchmark:main',
         ],
     },
 )

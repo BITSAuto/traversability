@@ -6,6 +6,7 @@ at its start pose, then checks the occupancy grid against them:
 
   ros2 run traversability spawn_test_scene   # place objects (re-run to reset)
   ros2 run traversability check_test_scene   # score /traversability/grid
+  ros2 run traversability check_test_scene --ros-args -p mode:=fused   # with semantics
   ros2 run traversability spawn_test_scene --ros-args -p remove_only:=true
 
 Run it on a plain road segment, not at the car's start pose: the start pose
@@ -55,14 +56,15 @@ class SceneObject:
     color: tuple = (0.5, 0.5, 0.5)
     texture: str = ''     # file in worlds/textures
     note: str = ''
+    expect_fused: str = ''  # with semantics, if different from ``expect``
 
 
 SCENE = (
     SceneObject('trav_paint_line', 4.5, 0.0, (0.3, 2.4, FLAT), 'free', (0.95, 0.95, 0.95)),
     SceneObject('trav_newspaper', 5.0, -1.3, (0.45, 0.6, FLAT), 'free', (1, 1, 1), 'newspaper.png'),
     SceneObject('trav_oil_stain', 6.5, 0.6, (0.9, 1.0, FLAT), 'free', (0.04, 0.04, 0.05)),
-    SceneObject('trav_grass', 4.0, 3.5, (1.2, 1.5, FLAT), 'free', (1, 1, 1), 'grass.jpg',
-                'flat, so free on geometry alone; phase 2 semantics must forbid it'),
+    SceneObject('trav_grass', 5.5, 2.8, (1.2, 1.5, FLAT), 'free', (1, 1, 1), 'grass.jpg',
+                'flat: free on geometry alone, forbidden with semantics', expect_fused='lethal'),
     SceneObject('trav_brick', 3.5, -2.2, (0.25, 0.3, 0.15), 'lethal', (0.6, 0.25, 0.15)),
     SceneObject('trav_curb', 5.5, -3.0, (3.0, 0.25, 0.15), 'lethal', (0.7, 0.7, 0.7)),
     SceneObject('trav_box', 7.5, -1.0, (0.5, 0.5, 0.5), 'lethal', (0.65, 0.5, 0.3)),
@@ -183,18 +185,33 @@ def footprint(grid_info, obj, margin_cells):
     return (np.abs(gx - obj.x) <= hx) & (np.abs(gy - obj.y) <= hy)
 
 
-def score(msg):
-    """Per-object and clear-region results for one OccupancyGrid."""
+def expectation(obj, fused):
+    return obj.expect_fused if fused and obj.expect_fused else obj.expect
+
+
+def score(msg, fused=False):
+    """Per-object and clear-region results for one OccupancyGrid.
+
+    ``fused``: judge against the expectations with semantics (phase 2), where
+    the flat grass patch must be lethal rather than free.
+    """
     grid = np.asarray(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
     results = []
     obstacle_zone = np.zeros(grid.shape, bool)
+    excluded = np.zeros(grid.shape, bool)
     for obj in SCENE:
-        if obj.expect == 'free':
+        expect = expectation(obj, fused)
+        flat = obj.size[2] <= FLAT
+        if flat:
             # Shrink by a cell so edge cells shared with the road don't count.
             cells = grid[footprint(msg.info, obj, -1)]
             seen = np.count_nonzero(cells != NO_INFO)
             lethal = np.count_nonzero(cells == LETHAL)
-            passed = seen > 0.5 * cells.size and lethal <= 0.02 * cells.size
+            if expect == 'free':
+                passed = seen > 0.5 * cells.size and lethal <= 0.02 * cells.size
+            else:   # a forbidden surface: (nearly) all of what is seen must be lethal
+                passed = seen > 0.5 * cells.size and lethal >= 0.8 * seen
+                excluded |= footprint(msg.info, obj, 2)
             detail = f'{seen}/{cells.size} cells seen, {lethal} lethal'
         else:
             # Only the near face is visible; one lethal cell around it counts.
@@ -203,20 +220,20 @@ def score(msg):
             lethal = np.count_nonzero(grid[mask] == LETHAL)
             passed = lethal > 0
             detail = f'{lethal} lethal cells'
-        results.append((obj, passed, detail))
+        results.append((obj, expect, passed, detail))
 
     (x0, x1), (y0, y1) = CLEAR_REGION
     res = msg.info.resolution
     ox, oy = msg.info.origin.position.x, msg.info.origin.position.y
     gx, gy = np.meshgrid(ox + (np.arange(msg.info.width) + 0.5) * res,
                          oy + (np.arange(msg.info.height) + 0.5) * res)
-    region = (gx >= x0) & (gx <= x1) & (gy >= y0) & (gy <= y1) & ~obstacle_zone
-    in_region = (gx >= x0) & (gx <= x1) & (gy >= y0) & (gy <= y1)
+    in_region = (gx >= x0) & (gx <= x1) & (gy >= y0) & (gy <= y1) & ~excluded
+    region = in_region & ~obstacle_zone
     false_lethal = np.count_nonzero(grid[region] == LETHAL)
     free = np.count_nonzero(grid[region] == FREE)
     lethal_objects = np.zeros(grid.shape, bool)
     for obj in SCENE:
-        if obj.expect == 'lethal':
+        if obj.size[2] > FLAT:
             lethal_objects |= footprint(msg.info, obj, 1)
     smear = np.count_nonzero((grid == LETHAL) & in_region & obstacle_zone & ~lethal_objects)
     return results, false_lethal, smear, free, np.count_nonzero(region)
@@ -226,6 +243,8 @@ class CheckTestScene(Node):
     def __init__(self):
         super().__init__('check_test_scene')
         self.frames = self.declare_parameter('frames', 5).value
+        # 'geometry' (phase 1) or 'fused' (phase 2: semantics enabled)
+        self.fused = self.declare_parameter('mode', 'geometry').value == 'fused'
         self.grids = []
         self.create_subscription(OccupancyGrid, '/traversability/grid', self.grids.append, 5)
 
@@ -237,14 +256,14 @@ def check_main(args=None):
         rclpy.spin_once(node, timeout_sec=1.0)
     all_passed = True
     for i, msg in enumerate(node.grids[-node.frames:]):
-        results, false_lethal, smear, free, region = score(msg)
-        frame_passed = all(p for _, p, _ in results) and false_lethal == 0
+        results, false_lethal, smear, free, region = score(msg, node.fused)
+        frame_passed = all(p for _, _, p, _ in results) and false_lethal == 0
         all_passed &= frame_passed
         if i == node.frames - 1 or not frame_passed:
             print(f'--- frame {i + 1}/{node.frames}: {"PASS" if frame_passed else "FAIL"}')
-            for obj, passed, detail in results:
+            for obj, expect, passed, detail in results:
                 note = f'  ({obj.note})' if obj.note else ''
-                print(f'  {"ok  " if passed else "FAIL"} {obj.name:16s} expect {obj.expect:6s} {detail}{note}')
+                print(f'  {"ok  " if passed else "FAIL"} {obj.name:16s} expect {expect:6s} {detail}{note}')
             print(f'  {"ok  " if false_lethal == 0 else "FAIL"} clear road region: '
                   f'{false_lethal} false lethal cells, {free}/{region} cells free '
                   f'(+{smear} lethal cells of obstacle smear within {SMEAR_MARGIN} m)')

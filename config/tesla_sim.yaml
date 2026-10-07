@@ -21,3 +21,13 @@ traversability_grid:
     y_min: -8.0
     y_max: 8.0
     resolution: 0.1
+    # Used when the launch file enables semantics.
+    semantic_camera_info_topic: /vehicle/camera/camera_info
+
+semantic_seg:
+  ros__parameters:
+    image_topic: /vehicle/camera/image_color
+    depth_topic: /vehicle/range_finder/image_registered   # RGB-D models only
+    camera_info_topic: /vehicle/camera/camera_info
+    input_width: 1024
+    input_height: 576
