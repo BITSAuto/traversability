@@ -4,8 +4,9 @@
       --arch segformer-b0 --rgbd --out students/b0_rgbd
 
 Validation uses every ``--val-every``-th frame of the frame folders, or with
-``--val-tail`` the last part of each recording (never trained on). IDD, if given with --idd, adds its train split to training (no
-depth, so RGB-D students see it with the height channel empty).
+``--val-tail`` the last part of each recording (never trained on). IDD, if
+given with --idd, adds its train split to training (no depth, so RGB-D
+students see it with the height channel empty).
 
 Writes <out>/best.pt (by validation mIoU), <out>/last.pt and
 <out>/log.csv; --export also writes <out>/best.onnx (+ .json) for TensorRT.
