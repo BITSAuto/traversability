@@ -198,6 +198,12 @@ def to_ground(points, rotation, origin):
     return (points - origin) @ rotation
 
 
+def height_above(points, rotation, origin):
+    """Height above the plane of (..., 3) camera points -- the Z component of
+    to_ground alone, at a third of the cost when that is all that's needed."""
+    return (points - origin) @ rotation[:, 2]
+
+
 def classify(ground_points, depth, camera_height, *, obstacle_height=0.10, drop_depth=0.10,
              clearance_height=2.5, depth_noise_coeff=0.0, noise_sigmas=3.0):
     """Label (..., 3) ground-frame points by their height above the plane.
