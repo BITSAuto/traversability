@@ -172,3 +172,12 @@ def test_fill_ground_gaps():
     row = spec.cell(0.0, 0.0)[0]
     assert np.all(grid[row, 20:26] == FREE)
     assert fill_ground_gaps(points, labels, 0.1, max_gap=0.0).shape == (0, 3)
+
+
+def test_height_above_matches_to_ground():
+    rng = np.random.default_rng(1)
+    plane = Plane(pitched_up(7.0), 1.5)
+    rotation, origin = geometry.ground_frame(plane)
+    pts = rng.normal(size=(50, 3)) * 5
+    np.testing.assert_allclose(geometry.height_above(pts, rotation, origin),
+                               geometry.to_ground(pts, rotation, origin)[:, 2], atol=1e-9)

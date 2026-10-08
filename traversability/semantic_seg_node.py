@@ -46,6 +46,9 @@ class SemanticSegNode(Node):
         info_topic = p('camera_info_topic', '/vehicle/camera/camera_info').value
         self.ground_frame = p('ground_frame', 'camera_ground').value
         self.depth_scale = p('depth_scale', 0.001).value
+        # The model sees height at its own input size (~1024x576), so compute it
+        # at reduced resolution: full-res costs ~100 ms per frame in numpy.
+        self.height_decimation = p('height_decimation', 2).value
 
         self.get_logger().info(f'Loading {self.model} ...')
         self.segmenter = segmentation.load(self.model, input_size=input_size)
@@ -94,8 +97,8 @@ class SemanticSegNode(Node):
         q, tr = t.rotation, t.translation
         rotation = quaternion_to_matrix(q.x, q.y, q.z, q.w)
         origin = np.array([tr.x, tr.y, tr.z])
-        points = geometry.deproject(depth, *self.intrinsics, min_range=0.1)
-        return geometry.to_ground(points, rotation, origin)[..., 2]
+        points = geometry.deproject(depth, *self.intrinsics, step=self.height_decimation, min_range=0.1)
+        return geometry.height_above(points, rotation, origin)
 
     def step(self):
         msg, self.latest_image = self.latest_image, None
