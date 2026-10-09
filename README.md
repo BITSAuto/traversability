@@ -20,6 +20,10 @@ Geometry alone cannot tell road from flat grass or a flush sidewalk, so a
 semantic model labels each colour pixel as road, sidewalk, terrain or other,
 and `traversability_grid` fuses the two (see **Phase 2**).
 
+Design history, decisions, verified facts, open questions, known bugs and
+status are in the [project docs](project-docs/README.md). Read them before
+changing anything, and update them with every change.
+
 ## Nodes
 
 | Executable | In | Out |
