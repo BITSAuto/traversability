@@ -13,7 +13,7 @@
 Inputs (sim / real): depth `/vehicle/range_finder/image` /
 `/camera/camera/depth/image_rect_raw`; colour `/vehicle/camera/image_color` /
 `/camera/camera/color/image_raw`; registered depth
-`/vehicle/range_finder/image_registered` /
+`/vehicle/range_finder_registered/image` /
 `/camera/camera/aligned_depth_to_color/image_raw`; IMU `/vehicle/imu` /
 `/camera/camera/accel/sample`.
 

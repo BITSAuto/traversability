@@ -44,7 +44,7 @@ class RecordFrames(Node):
         self.depth_scale = p('depth_scale', 0.001).value
         self.max_skew = p('max_skew', 0.05).value          # s between colour and depth stamps
         image_topic = p('image_topic', '/vehicle/camera/image_color').value
-        depth_topic = p('depth_topic', '/vehicle/range_finder/image_registered').value
+        depth_topic = p('depth_topic', '/vehicle/range_finder_registered/image').value
         info_topic = p('camera_info_topic', '/vehicle/camera/camera_info').value
         for sub in ('rgb', 'depth', 'meta'):
             os.makedirs(os.path.join(self.out, sub), exist_ok=True)
