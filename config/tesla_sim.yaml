@@ -27,7 +27,7 @@ traversability_grid:
 semantic_seg:
   ros__parameters:
     image_topic: /vehicle/camera/image_color
-    depth_topic: /vehicle/range_finder/image_registered   # RGB-D models only
+    depth_topic: /vehicle/range_finder_registered/image   # RGB-D models only
     camera_info_topic: /vehicle/camera/camera_info
     input_width: 1024
     input_height: 576

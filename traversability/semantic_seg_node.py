@@ -42,7 +42,7 @@ class SemanticSegNode(Node):
         input_size = (p('input_width', 1024).value, p('input_height', 576).value)
         self.min_confidence = p('min_confidence', 0.0).value
         image_topic = p('image_topic', '/vehicle/camera/image_color').value
-        depth_topic = p('depth_topic', '/vehicle/range_finder/image_registered').value
+        depth_topic = p('depth_topic', '/vehicle/range_finder_registered/image').value
         info_topic = p('camera_info_topic', '/vehicle/camera/camera_info').value
         self.ground_frame = p('ground_frame', 'camera_ground').value
         self.depth_scale = p('depth_scale', 0.001).value
